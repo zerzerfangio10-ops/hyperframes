@@ -1,0 +1,10 @@
+# Operating system / IDE
+.DS_Store
+Thumbs.db
+.idea/
+*.iml
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
