@@ -4,6 +4,7 @@ import {
   addonBlocks,
   checkoutSkill,
   createCheckout,
+  MANAGE_LABEL,
   money,
   pageUrl,
   readOffer,
@@ -16,6 +17,7 @@ import { c } from "../ui/colors.js";
 import { trackBillingCheckoutFailed, trackBillingWaitTimeout } from "../telemetry/events.js";
 import { failCommand, setCommandExitCode } from "../utils/commandResult.js";
 import { isUnattended } from "../utils/attendedTerminal.js";
+import { parsePositiveIntegerArg } from "../utils/integerArg.js";
 import { defineCommand } from "../utils/defineCommand.js";
 
 const describe = (p: Plan | null) =>
@@ -128,15 +130,29 @@ function reportCheckoutFailure(error: unknown): CheckoutError | null {
   return error;
 }
 
+async function showPlan(open: boolean): Promise<void> {
+  const plan = await readPlan();
+  console.log(`HyperFrames: ${plan ? describe(plan) : "plan unavailable"}`);
+  if (plan?.plan === "none" && !open) return;
+  const url = await pageUrl("manage");
+  console.log(`${MANAGE_LABEL} ${c.accent(url)}`);
+  if (open && !isUnattended()) await openBrowser(url);
+}
+
 /** Opens the plans or credits page, then waits until the account shows the change, so the run continues on its own. */
 export default defineCommand({
   meta: {
     name: "billing",
     description:
-      "Open the HyperFrames plans page (subscribe) or buy add-on credits, used separately from your plan's monthly credits (add-credits), and wait until the person is done",
+      "Show your HyperFrames plan and where to manage or cancel it (--manage opens that page), open the plans page (subscribe) or buy add-on credits, used separately from your plan's monthly credits (add-credits), and wait until the person is done",
   },
   args: {
-    action: { type: "positional", description: "subscribe | add-credits", required: true },
+    action: { type: "positional", description: "subscribe | add-credits", required: false },
+    manage: {
+      type: "boolean",
+      description:
+        "Open the page to manage or cancel your plan (prints the link when no one is at the terminal)",
+    },
     needed: {
       type: "string",
       description: "Credits the waiting step needs (add-credits waits until the balance covers it)",
@@ -156,14 +172,17 @@ export default defineCommand({
   },
   // fallow-ignore-next-line complexity
   async run({ args }) {
+    if (args.action === undefined) return showPlan(args.manage === true);
     const action = String(args.action);
     if (action !== "subscribe" && action !== "add-credits") {
       console.error(c.error("Use `billing subscribe` or `billing add-credits`."));
       failCommand();
     }
-    const needed = Number(args.needed) || undefined;
+    const needed = parsePositiveIntegerArg(args.needed, "--needed");
+    const timeoutSeconds =
+      parsePositiveIntegerArg(args.timeout, "--timeout", { unit: "seconds" }) ?? 600;
     const skill = checkoutSkill(args.skill);
-    const deadline = Date.now() + (Number(args.timeout) || 600) * 1000;
+    const deadline = Date.now() + timeoutSeconds * 1000;
     const stop = new AbortController();
     const atDeadline = setTimeout(() => stop.abort(), deadline - Date.now());
     atDeadline.unref?.();

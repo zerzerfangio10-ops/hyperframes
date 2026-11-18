@@ -177,6 +177,73 @@ describe("billing add-credits", () => {
   });
 });
 
+describe("billing with no action", () => {
+  const printed = async (rawArgs: string[], read: { plan: string; credits: number } | null) => {
+    held.reads = [read];
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await runCommand(billing, { rawArgs });
+    return log.mock.calls.flat().join("\n");
+  };
+  const MANAGE =
+    /^Manage or cancel your plan: https:\/\/hyperframes\.studio\/billing\?from=cli&utm_source=cli&workspace_hint=sp-1$/m;
+
+  it("shows a paid plan and the page that manages or cancels it, opening nothing", async () => {
+    const out = await printed([], { plan: "pro", credits: 500 });
+    expect(out).toContain("HyperFrames: pro plan, 500 credits");
+    expect(out).toMatch(MANAGE);
+    expect(opened).toEqual([]);
+  });
+
+  it("shows Free with no manage line", async () => {
+    const out = await printed([], { plan: "none", credits: 0 });
+    expect(out).toContain("HyperFrames: Free");
+    expect(out).not.toContain("Manage or cancel");
+  });
+
+  it("--manage opens that page at a terminal", async () => {
+    terminal.attended = true;
+    expect(await printed(["--manage"], { plan: "pro", credits: 500 })).toMatch(MANAGE);
+    expect(new URL(opened[0] ?? "").pathname).toBe("/billing");
+  });
+
+  it("--manage only prints the link when no one is at the terminal", async () => {
+    expect(await printed(["--manage"], null)).toMatch(MANAGE);
+    expect(opened).toEqual([]);
+  });
+});
+
+describe("billing numeric flags", () => {
+  it.each([
+    ["--timeout", "abc"],
+    ["--timeout", "-5"],
+    ["--timeout", "0"],
+    ["--timeout", "2.5"],
+    ["--needed", "abc"],
+    ["--needed", "-1"],
+    ["--needed", "0"],
+  ])("rejects %s %s as a usage error before opening any page", async (flag, value) => {
+    await expect(
+      runCommand(billing, { rawArgs: ["add-credits", flag, value] }),
+    ).rejects.toMatchObject({ result: { exitCode: 2, kind: "usage_error" } });
+    expect(opened).toEqual([]);
+    expect(plan.calls).toBe(0);
+  });
+
+  it("still waits for a valid --needed and --timeout", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.useFakeTimers();
+    const done = runCommand(billing, {
+      rawArgs: ["add-credits", "--needed", "100", "--timeout", "30"],
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    await done;
+    vi.useRealTimers();
+    expect(opened).toHaveLength(1);
+    expect(new URL(opened[0] ?? "").searchParams.get("needed_credits")).toBe("100");
+  });
+});
+
 describe("billing without a terminal", () => {
   it("prints Stripe's checkout link instead of waiting for Enter, and opens only the pricing page", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);

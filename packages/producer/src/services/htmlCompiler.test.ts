@@ -1,5 +1,5 @@
 // fallow-ignore-file code-duplication
-import { describe, expect, it, mock, beforeAll } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,6 +8,7 @@ import { runInThisContext } from "node:vm";
 import { parseHTML } from "linkedom";
 import { interpolateVolumeGain } from "@hyperframes/core/media-volume-envelope";
 import { redactTelemetryString } from "@hyperframes/core";
+import { _clearGoogleFontCssCacheForTests } from "@hyperframes/core/fonts/embed";
 import { defaultLogger } from "../logger.js";
 import { NotMediaPayloadError, _setDownloadFetchForTests } from "@hyperframes/engine";
 import {
@@ -664,8 +665,8 @@ describe("inlineExternalScripts", () => {
         <script src="https://cdn.example.com/gsap.min.js"></script>
       </body></html>`;
       const result = await inlineExternalScripts(html);
-      // Both identical script tags should be fetched and replaced independently.
-      expect(fetchCount).toBe(2);
+      // The URL is fetched once and both tags are replaced.
+      expect(fetchCount).toBe(1);
       expect(
         result.match(/\/\* inlined: https:\/\/cdn\.example\.com\/gsap\.min\.js \*\//g)?.length,
       ).toBe(2);
@@ -1082,19 +1083,14 @@ describe("detectRenderModeHints", () => {
   it("compileForRender aborts naming a data-composition-src that points at a folder", async () => {
     const projectDir = makeSubCompProject(
       "hf-folder-subcomp-",
-      [{ id: "intro", src: "compositions/intro" }],
+      [{ id: "intro", src: "compositions/intro.html" }],
       {},
     );
     try {
-      mkdirSync(join(projectDir, "compositions", "intro"));
-      writeFileSync(
-        join(projectDir, "compositions", "intro", "index.html"),
-        validSubCompHtml("intro", "Intro"),
-      );
-
+      mkdirSync(join(projectDir, "compositions", "intro.html"));
       await expect(
         compileForRender(projectDir, join(projectDir, "index.html"), projectDir),
-      ).rejects.toThrow(/compositions\/intro[\s\S]*a folder, not an HTML file/);
+      ).rejects.toThrow(/compositions\/intro\.html[\s\S]*a folder, not an HTML file/);
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
     }
@@ -1109,7 +1105,29 @@ describe("detectRenderModeHints", () => {
     try {
       await expect(
         compileForRender(projectDir, join(projectDir, "index.html"), projectDir),
-      ).rejects.toThrow(/compositions\/\.env\.html[\s\S]*git metadata or an env file/);
+      ).rejects.toThrow(
+        /compositions\/\.env\.html[\s\S]*git metadata, an env file or a private tool record/,
+      );
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it("compileForRender refuses to inline the app's records under .hyperframes as a data-composition-src", async () => {
+    const projectDir = makeSubCompProject(
+      "hf-record-subcomp-",
+      [{ id: "intro", src: ".hyperframes/agent-handoff.html" }],
+      {},
+    );
+    try {
+      mkdirSync(join(projectDir, ".hyperframes"));
+      writeFileSync(
+        join(projectDir, ".hyperframes", "agent-handoff.html"),
+        validSubCompHtml("intro", "HANDOFF_SECRET_VALUE"),
+      );
+      await expect(
+        compileForRender(projectDir, join(projectDir, "index.html"), projectDir),
+      ).rejects.toThrow(/\.hyperframes\/agent-handoff\.html[\s\S]*a private tool record/);
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
     }
@@ -1170,6 +1188,61 @@ describe("detectRenderModeHints", () => {
       rmSync(projectDir, { recursive: true, force: true });
     }
   });
+
+  it("compileForRender refuses an entry that is not an .html file, and renders the same page named .html", async () => {
+    const projectDir = makeSubCompProject("hf-media-entry-", [], {});
+    try {
+      const page = readFileSync(join(projectDir, "index.html"), "utf-8");
+      writeFileSync(join(projectDir, "scene.png"), page);
+      writeFileSync(join(projectDir, "scene.html"), page);
+      await expect(
+        compileForRender(projectDir, join(projectDir, "scene.png"), projectDir),
+      ).rejects.toThrow(/scene\.png is not an \.html file, so it is refused/);
+      const compiled = await compileForRender(
+        projectDir,
+        join(projectDir, "scene.html"),
+        projectDir,
+      );
+      expect(compiled.html).toContain('data-composition-id="main"');
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it("compileForRender checks containment before the file type of a data-composition-src", async () => {
+    const projectDir = makeSubCompProject(
+      "hf-outside-media-subcomp-",
+      [{ id: "intro", src: "../outside-scene.png" }],
+      {},
+    );
+    const outside = join(dirname(projectDir), "outside-scene.png");
+    writeFileSync(outside, validSubCompHtml("intro", "Outside"));
+    try {
+      await expect(
+        compileForRender(projectDir, join(projectDir, "index.html"), projectDir),
+      ).rejects.toThrow(/outside-scene\.png: it is outside the project folder/);
+    } finally {
+      rmSync(outside, { force: true });
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["compositions/scene.png", "/compositions/scene.png", "compositions/scene.mp4"])(
+    "compileForRender refuses a data-composition-src that is not an .html file: %s",
+    async (src) => {
+      const name = src.split("/").pop() ?? "";
+      const projectDir = makeSubCompProject("hf-media-subcomp-", [{ id: "intro", src }], {
+        [name]: validSubCompHtml("intro", "Media named"),
+      });
+      try {
+        await expect(
+          compileForRender(projectDir, join(projectDir, "index.html"), projectDir),
+        ).rejects.toThrow(/not an \.html file/);
+      } finally {
+        rmSync(projectDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each([
     ["dot-dot segments", "../outside-scene.html"],
@@ -1400,6 +1473,32 @@ describe("detectShaderTransitionUsage", () => {
 });
 
 describe("system-primary font normalization", () => {
+  // Google Fonts answers from a stub and a fresh cache, so a cold cache never waits on the network.
+  const FACE = "https://fonts.gstatic.com/s/stub/face.woff2";
+  let restore = () => {};
+  beforeEach(() => {
+    const previousFetch = globalThis.fetch;
+    const previousCacheDir = process.env.HYPERFRAMES_FONT_CACHE_DIR;
+    process.env.HYPERFRAMES_FONT_CACHE_DIR = mkdtempSync(join(tmpdir(), "hf-font-cache-"));
+    _clearGoogleFontCssCacheForTests();
+    globalThis.fetch = (async (input: unknown) => {
+      const url = new URL(String(input));
+      if (url.href === FACE) return new Response(new Uint8Array(64));
+      if (url.hostname !== "fonts.googleapis.com") throw new TypeError(`offline: ${url.href}`);
+      const family = (url.searchParams.get("family") ?? "").split(":")[0];
+      return new Response(
+        `@font-face { font-family: '${family}'; src: url(${FACE}) format('woff2'); }`,
+      );
+    }) as unknown as typeof fetch;
+    restore = () => {
+      _clearGoogleFontCssCacheForTests();
+      globalThis.fetch = previousFetch;
+      if (previousCacheDir === undefined) delete process.env.HYPERFRAMES_FONT_CACHE_DIR;
+      else process.env.HYPERFRAMES_FONT_CACHE_DIR = previousCacheDir;
+    };
+  });
+  afterEach(() => restore());
+
   it("promotes Inter before system/generic primary stacks before distributed plan validation", async () => {
     const projectDir = mkdtempSync(join(tmpdir(), "hf-system-primary-font-"));
     writeFileSync(
@@ -1484,6 +1583,35 @@ describe("system-primary font normalization", () => {
 });
 
 describe("local font embedding", () => {
+  it.each([".env", ".git/config", ".hyperframes/agent-handoff.json"])(
+    "never inlines the private project file %s that an @font-face url names",
+    async (file) => {
+      const projectDir = mkdtempSync(join(tmpdir(), "hf-private-font-"));
+      const secret = "HEYGEN_API_KEY=not-for-the-page";
+      mkdirSync(dirname(join(projectDir, file)), { recursive: true });
+      writeFileSync(join(projectDir, file), secret);
+      writeFileSync(
+        join(projectDir, "index.html"),
+        `<!DOCTYPE html>
+<html><head><style>
+  @font-face { font-family: "P"; src: url("${file}"); }
+</style></head><body>
+  <div data-composition-id="root" data-width="640" data-height="360" data-duration="1">Text</div>
+</body></html>`,
+      );
+
+      const { html } = await compileForRender(
+        projectDir,
+        join(projectDir, "index.html"),
+        projectDir,
+      );
+
+      expect(html).not.toContain(Buffer.from(secret).toString("base64"));
+      expect(html).not.toContain("data:font/");
+      rmSync(projectDir, { recursive: true, force: true });
+    },
+  );
+
   it("deduplicates assembled scene fonts before embedding and keeps the last descriptor order", async () => {
     const projectDir = mkdtempSync(join(tmpdir(), "hf-repeated-scene-fonts-"));
     mkdirSync(join(projectDir, "fonts"));
@@ -3326,6 +3454,25 @@ describe("compileForRender non-media payload sniff (STUDIO-5433)", () => {
     expect(warnings.join("\n")).toContain("text document");
     expect(warnings.join("\n")).toContain("a1");
   });
+
+  it.each([".git/clip.mp4", ".hyperframes/clip.mp4", ".claude/clip.mp4", "keys/id_rsa"])(
+    "never probes the private project file %s that a <video> or <audio> names",
+    async (src) => {
+      const projectDir = writeProject(
+        `<video id="v1" src="${src}" data-start="0" muted></video>` +
+          `<audio id="a1" src="${src}" data-start="0"></audio>`,
+      );
+      mkdirSync(dirname(join(projectDir, src)), { recursive: true });
+      writeFileSync(join(projectDir, src), readFileSync(join(projectDir, "assets", "nested.html")));
+      const warnings: string[] = [];
+      const log = { ...defaultLogger, warn: (message: string) => warnings.push(message) };
+
+      await compileForRender(projectDir, join(projectDir, "index.html"), projectDir, { log });
+
+      expect(warnings.join("\n")).not.toContain("text document");
+      rmSync(projectDir, { recursive: true, force: true });
+    },
+  );
 });
 
 describe("duplicate media ids across nested compositions", () => {

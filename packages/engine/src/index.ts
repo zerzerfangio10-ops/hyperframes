@@ -60,6 +60,7 @@ export type {
 export {
   resolveConfig,
   resolvePageNavigationTimeout,
+  resolveRestrictPageNetwork,
   validateEngineConfigSnapshot,
   DEFAULT_CONFIG,
   scaleProtocolTimeoutForComposition,
@@ -197,6 +198,7 @@ export {
 } from "./services/screenshotService.js";
 
 // ── Encoding ───────────────────────────────────────────────────────────────────
+export { concatListInputArgs } from "@hyperframes/parsers/ff-binaries";
 export {
   buildEncoderArgs,
   encodeFramesFromDir,
@@ -386,7 +388,14 @@ export {
   settleOnBrowserSafePort,
 } from "./utils/browserSafePort.js";
 
+export {
+  answerOwnLoopbackHostOnly,
+  isOwnLoopbackHost,
+  SAME_ORIGIN_FRAMING_HEADERS,
+} from "./utils/loopbackOnly.js";
+
 export { readWebGlVendorInfoFromCanvas } from "./utils/readWebGlVendorInfoFromCanvas.js";
+export { createConcurrencyLimit } from "./utils/concurrencyLimit.js";
 
 export {
   extractMediaMetadata,
@@ -407,6 +416,8 @@ export {
   type KeyframeAnalysis,
 } from "./utils/ffprobe.js";
 
+export { urlInputArgs, withPublicOnlyProxy } from "./utils/urlInput.js";
+
 export { mediaIdPathSegment } from "./utils/mediaPathSegment.js";
 
 export {
@@ -415,6 +426,7 @@ export {
   assertMediaPayload,
   playlistLeavesItsFolder,
   fingerprintElementId,
+  isNotImagePayload,
   isNotMediaPayload,
 } from "./utils/notMediaPayload.js";
 
@@ -426,6 +438,7 @@ export {
   fetchPublicHttpsText,
   isHttpUrl,
   safeDownloadUrlIdentity,
+  isUrlNotPermittedError,
   writeUrlDownloadTelemetry,
   type SafeDownloadUrlIdentity,
   type UrlDownloadOptions,
@@ -433,10 +446,16 @@ export {
   type PublicHttpsTextOptions,
 } from "./utils/urlDownloader.js";
 export { isBlockedNetworkHost } from "./utils/networkPolicy.js";
+export {
+  assetRootsRefusal,
+  isInsideAssetRoots,
+  isPrivateUnderAssetRoots,
+} from "./utils/assetRoots.js";
 export { onRenderRefusal } from "./services/publicNetwork/captureProxy.js";
 export type { RefusedHostClass } from "./services/publicNetwork/publicNetwork.js";
 export {
   runFfmpeg,
+  withFfmpegProgress,
   formatFfmpegError,
   describeFfmpegFailure,
   isExternalFfmpegInterruption,
@@ -574,7 +593,7 @@ export {
   chromeSandboxEnabled,
   launchWithChromeSandboxFallback,
   type ChromeSandboxHost,
-} from "./services/chromeSandbox.js";
+} from "@hyperframes/core/chrome-sandbox";
 export {
   VariablesInvalidError,
   type VariablesIssue,
